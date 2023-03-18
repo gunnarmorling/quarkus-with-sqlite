@@ -112,6 +112,12 @@ public class UserResource {
     private int getUserCount() throws SQLException {
         try (Connection connection = ds.getConnection()) {
             try (Statement statement = connection.createStatement()) {
+                try (ResultSet rs = statement.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")) {
+                    if (!rs.next()) {
+                        return 0;
+                    }
+                }
+
                 try (ResultSet rs = statement.executeQuery("SELECT COUNT(1) FROM users")) {
                     rs.next();
                     return rs.getInt(1);
