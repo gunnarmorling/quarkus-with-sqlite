@@ -51,21 +51,42 @@ public class UserResource {
     public void dropAndCreateTable() throws Exception {
         try (Connection connection = ds.getConnection()) {
             try (Statement statement = connection.createStatement()) {
-                statement.setQueryTimeout(30);
+                statement.executeUpdate("DROP INDEX IF EXISTS addresses_user_id");
+                statement.executeUpdate("DROP INDEX IF EXISTS phone_numbers_user_id");
+                statement.executeUpdate("DROP TABLE IF EXISTS addresses");
+                statement.executeUpdate("DROP TABLE IF EXISTS phone_numbers");
                 statement.executeUpdate("DROP TABLE IF EXISTS users");
                 statement.executeUpdate("""
                         CREATE TABLE users(
                           id INTEGER PRIMARY KEY,
                           first_name TEXT,
                           last_name TEXT,
+                          email TEXT,
+                          birthday TEXT
+                        )
+                        """);
+                statement.executeUpdate("""
+                        CREATE TABLE addresses(
+                          id INTEGER PRIMARY KEY,
+                          user_id INTEGER,
                           street TEXT,
                           zip_code TEXT,
                           city TEXT,
                           country TEXT,
-                          phone TEXT,
-                          birthday TEXT
+                          FOREIGN KEY(user_id) REFERENCES users(id)
                         )
                         """);
+                statement.executeUpdate("CREATE INDEX addresses_user_id ON addresses(user_id)");
+                statement.executeUpdate("""
+                        CREATE TABLE phone_numbers(
+                          user_id INTEGER,
+                          type TEXT,
+                          number TEXT,
+                          PRIMARY KEY(user_id, type)
+                          FOREIGN KEY(user_id) REFERENCES users(id)
+                        )
+                        """);
+                statement.executeUpdate("CREATE INDEX phone_numbers_user_id ON phone_numbers(user_id)");
                 userCount = 0;
             }
         }
@@ -81,31 +102,66 @@ public class UserResource {
         try (Connection connection = ds.getConnection()) {
             connection.setAutoCommit(false);
 
-            try (PreparedStatement ps = connection.prepareStatement("""
+            try (PreparedStatement insertUser = connection.prepareStatement("""
                     INSERT INTO users
-                      (first_name, last_name, street, zip_code, city, country, phone, birthday)
-                      VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """)) {
+                      (first_name, last_name, email, birthday)
+                      VALUES(?, ?, ?, ?)
+                      RETURNING id
+                    """, Statement.RETURN_GENERATED_KEYS);
+                 PreparedStatement insertAddress = connection.prepareStatement("""
+                    INSERT INTO addresses
+                      (user_id, street, zip_code, city, country)
+                      VALUES(?, ?, ?, ?, ?)
+                    """);
+                PreparedStatement insertPhoneNo = connection.prepareStatement("""
+                        INSERT INTO phone_numbers
+                          (user_id, type, number)
+                          VALUES(?, ?, ?)
+                        """)) {
                 for (int n = 1; n <= numberOfRecords; n++) {
-                    Address address = faker.address();
-
-                    ps.setString(1, faker.name().firstName());
-                    ps.setString(2, faker.name().lastName());
-                    ps.setString(3, address.streetAddress());
-                    ps.setString(4, address.zipCode());
-                    ps.setString(5, address.city());
-                    ps.setString(6, address.country());
-                    ps.setString(7, faker.phoneNumber().cellPhone());
-                    ps.setString(8,
+                    insertUser.setString(1, faker.name().firstName());
+                    insertUser.setString(2, faker.name().lastName());
+                    insertUser.setString(3, faker.internet().emailAddress());
+                    insertUser.setString(4,
                             LocalDate.ofInstant(faker.date().birthday().toInstant(), ZoneId.of("UTC")).toString());
-                    ps.execute();
+                    insertUser.execute();
+                    long userId = getGeneratedId(insertUser);
+
+                    long addressCount = ThreadLocalRandom.current().nextInt(1, 5);
+                    for (int a = 0; a < addressCount; a++) {
+                        Address address = faker.address();
+                        insertAddress.setLong(1, userId);
+                        insertAddress.setString(2, address.streetAddress());
+                        insertAddress.setString(3, address.zipCode());
+                        insertAddress.setString(4, address.city());
+                        insertAddress.setString(5, address.country());
+                        insertAddress.execute();
+                    }
+
+                    insertPhoneNo.setLong(1, userId);
+                    insertPhoneNo.setString(2, "cell");
+                    insertPhoneNo.setString(3, faker.phoneNumber().cellPhone());
+                    insertPhoneNo.execute();
+
+                    insertPhoneNo.setLong(1, userId);
+                    insertPhoneNo.setString(2, "home");
+                    insertPhoneNo.setString(3, faker.phoneNumber().phoneNumber());
+                    insertPhoneNo.execute();
                 }
             }
+
             connection.commit();
             userCount = getUserCount();
 
             return "Inserted %s record(s) in %s ms. Total records: %s".formatted(numberOfRecords,
                     System.currentTimeMillis() - start, userCount);
+        }
+    }
+
+    private long getGeneratedId(PreparedStatement insertUser) throws SQLException {
+        try(ResultSet res = insertUser.getResultSet()) {
+            res.next();
+            return res.getLong(1);
         }
     }
 
